@@ -215,8 +215,18 @@ impl CreditLineContract {
 
         // TODO: Query liquidity pool contract
         // Example: liquidity_pool_client.get_available_liquidity()
-        // For now, we assume liquidity is sufficient
+    // For now, we assume liquidity is sufficient
         let _ = required_from_pool;
+    }
+
+    /// Calculate appropriate penalty amount (20-30 points based on loan size)
+    fn calculate_default_penalty(loan: &Loan) -> u32 {
+        // Simple logic: 20 points base penalty, 30 points if loan > 5000 units
+        if loan.total_amount > 5000 {
+            30
+        } else {
+            20
+        }
     }
 
     pub fn mark_defaulted(env: Env, loan_id: u64) -> Result<(), CreditLineError> {
@@ -260,14 +270,18 @@ impl CreditLineContract {
             loan.guarantee_amount,
         );
 
-        // 7. Trigger reputation decrease (Phase 4 placeholder)
+        // 7. Trigger reputation decrease
         if let Some(reputation_contract) = storage::get_reputation_contract(&env) {
-            // Only attempt the call if we aren't in a test or if you've set up a mock
-            // For now, let's just make sure the call is reachable
-            env.invoke_contract::<()>(
+            let penalty = Self::calculate_default_penalty(&loan);
+            let updater = env.current_contract_address();
+
+            // Call decrease_score(updater, user, amount)
+            // Error handling: if the reputation call fails, we still want the loan to be marked as defaulted.
+            // Using try_invoke_contract allows us to catch the failure and log it without rolling back the whole transaction.
+            let _ = env.try_invoke_contract::<(), soroban_sdk::Error>(
                 &reputation_contract,
-                &symbol_short!("slash"),
-                (loan.borrower,).into_val(&env),
+                &Symbol::new(&env, "decrease_score"),
+                (updater, loan.borrower, penalty).into_val(&env),
             );
         }
 

@@ -15,7 +15,7 @@ impl MockReputation {
     pub fn get_score(_env: Env, _user: Address) -> u32 {
         100 // Returns 100 to pass the threshold check
     }
-    pub fn slash(_env: Env, _user: Address) {
+    pub fn decrease_score(_env: Env, _updater: Address, _user: Address, _amount: u32) {
         // Does nothing, just needs to exist for the call to succeed
     }
 }
@@ -615,7 +615,7 @@ fn test_mark_defaulted_success() {
     // Time Travel past the due date
     env.ledger().set_timestamp(12000);
 
-    // This calls mark_defaulted which internally calls MockReputation::slash
+    // This calls mark_defaulted which internally calls MockReputation::decrease_score
     client.mark_defaulted(&loan_id);
 
     let updated_loan = client.get_loan(&loan_id);
