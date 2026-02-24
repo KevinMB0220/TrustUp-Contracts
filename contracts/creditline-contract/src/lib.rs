@@ -215,7 +215,7 @@ impl CreditLineContract {
 
         // TODO: Query liquidity pool contract
         // Example: liquidity_pool_client.get_available_liquidity()
-    // For now, we assume liquidity is sufficient
+        // For now, we assume liquidity is sufficient
         let _ = required_from_pool;
     }
 
@@ -286,6 +286,72 @@ impl CreditLineContract {
         }
 
         Ok(())
+    }
+
+    /// Repay a loan (partial or full)
+    /// Returns the remaining balance after payment
+    pub fn repay_loan(env: Env, borrower: Address, loan_id: u64, amount: i128) -> i128 {
+        // 1. Auth first
+        borrower.require_auth();
+
+        // 2. Load loan
+        let mut loan = storage::read_loan(&env, loan_id)
+            .unwrap_or_else(|| panic_with_error!(&env, CreditLineError::LoanNotFound));
+
+        // 3. Verify borrower matches
+        if loan.borrower != borrower {
+            panic_with_error!(&env, CreditLineError::UnauthorizedRepayer);
+        }
+
+        // 4. Loan must be Active
+        if loan.status != LoanStatus::Active {
+            panic_with_error!(&env, CreditLineError::LoanNotActive);
+        }
+
+        // 5. Amount must be > 0 and <= remaining_balance
+        if amount <= 0 || amount > loan.remaining_balance {
+            panic_with_error!(&env, CreditLineError::InvalidRepaymentAmount);
+        }
+
+        // 6. Calculate new remaining balance
+        let new_balance = loan
+            .remaining_balance
+            .checked_sub(amount)
+            .unwrap_or_else(|| panic_with_error!(&env, CreditLineError::Underflow));
+
+        // 7. Update loan state
+        loan.remaining_balance = new_balance;
+
+        let is_fully_repaid = new_balance == 0;
+        if is_fully_repaid {
+            loan.status = LoanStatus::Paid;
+        }
+
+        storage::write_loan(&env, &loan);
+
+        // 8. Emit event
+        events::emit_loan_repaid(
+            &env,
+            &borrower,
+            loan_id,
+            amount,
+            new_balance,
+            is_fully_repaid,
+        );
+
+        // 9. Trigger reputation increase on full repayment
+        if is_fully_repaid {
+            if let Some(reputation_contract) = storage::get_reputation_contract(&env) {
+                let updater = env.current_contract_address();
+                let _ = env.try_invoke_contract::<(), soroban_sdk::Error>(
+                    &reputation_contract,
+                    &Symbol::new(&env, "increase_score"),
+                    (updater, borrower, 10u32).into_val(&env),
+                );
+            }
+        }
+
+        new_balance
     }
 }
 
