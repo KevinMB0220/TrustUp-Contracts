@@ -7,7 +7,7 @@ use soroban_sdk::contracterror;
 pub enum CreditLineError {
     NotAdmin = 1,
     InsufficientGuarantee = 2,
-    MerchantNotActive = 3,
+    InvalidMerchant = 3,
     InsufficientReputation = 4,
     InsufficientLiquidity = 5,
     LoanNotFound = 6,

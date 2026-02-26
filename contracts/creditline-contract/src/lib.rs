@@ -164,7 +164,7 @@ impl CreditLineContract {
     /// Validate merchant is registered and active
     fn validate_merchant(env: &Env, merchant: &Address) {
         let merchant_registry = storage::get_merchant_registry(env)
-            .unwrap_or_else(|| panic_with_error!(env, CreditLineError::MerchantNotActive));
+            .unwrap_or_else(|| panic_with_error!(env, CreditLineError::InvalidMerchant));
 
         // Call the merchant registry contract to check if merchant is active
         use soroban_sdk::IntoVal;
@@ -176,7 +176,7 @@ impl CreditLineContract {
         );
 
         if !is_active {
-            panic_with_error!(env, CreditLineError::MerchantNotActive);
+            panic_with_error!(env, CreditLineError::InvalidMerchant);
         }
     }
 

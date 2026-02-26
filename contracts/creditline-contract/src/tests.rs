@@ -1372,7 +1372,7 @@ fn test_active_merchant_can_receive_loan() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3)")] // MerchantNotActive
+#[should_panic(expected = "Error(Contract, #3)")] // InvalidMerchant
 fn test_inactive_merchant_loan_is_rejected() {
     // A merchant that is registered but set to inactive must fail
     let t = TestCtx::setup();
@@ -1395,12 +1395,12 @@ fn test_inactive_merchant_loan_is_rejected() {
         (&t.admin, &inactive_merchant).into_val(&t.env),
     );
 
-    // This should panic with MerchantNotActive error
+    // This should panic with InvalidMerchant error
     let _ = t.create_default_loan(&user, &inactive_merchant);
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #3)")] // MerchantNotActive
+#[should_panic(expected = "Error(Contract, #3)")] // InvalidMerchant
 fn test_unregistered_merchant_loan_is_rejected() {
     // A merchant address unknown to the registry must fail
     let t = TestCtx::setup();
@@ -1411,7 +1411,7 @@ fn test_unregistered_merchant_loan_is_rejected() {
     let due_date = t.env.ledger().timestamp() + 10_000;
     let schedule = t.single_installment(1000, due_date);
 
-    // This should panic with MerchantNotActive error
+    // This should panic with InvalidMerchant error
     let _ = t
         .client
         .create_loan(&user, &unknown_merchant, &1000, &200, &schedule);
