@@ -1677,7 +1677,6 @@ fn test_withdrawal_calculation_precision() {
     let second_deposit = 10000;
     let interest_amount = 1000;
     let principal_repayment = 0;
-    let lp_percentage = 85;
     let expected_liquidity_after_interest = 15850;
     let calc3_shares = 1000;
     let expected_calc3 = 1056;
@@ -1755,7 +1754,6 @@ fn test_share_price_calculation() {
     let expected_share_price_after_withdrawal = 10850;
     let loop_interest_amount = 100;
     let loop_iterations = 5;
-    let loop_lp_interest = (loop_interest_amount * lp_percentage) / 100;
     let expected_final_liquidity = 3680;
     let expected_final_share_price = 12266;
 
@@ -1825,7 +1823,6 @@ fn test_multiple_interest_distributions() {
     let expected_initial_share_price = 10_000;
     let interest_amount = 100;
     let principal_repayment = 0;
-    let lp_percentage = 85;
     let expected_liquidity_after_event1 = 1085;
     let expected_share_price_after_event1 = 10850;
     let expected_liquidity_after_event2 = 1170;
@@ -1998,4 +1995,377 @@ fn test_maximum_values_handling() {
     // Test withdrawal with large amounts
     let withdrawn = context.client.withdraw(&provider, &withdrawal_shares);
     assert_eq!(withdrawn, expected_liquidity_after_interest);
+}
+
+// ─── Admin Functions Tests ───────────────────────────────────────────────────
+
+#[test]
+fn test_set_treasury() {
+    let t = TestEnv::setup();
+    let new_treasury = Address::generate(&t.env);
+
+    t.client.set_treasury(&t.admin, &new_treasury);
+
+    // Verify by distributing interest and checking new treasury receives fees
+    let provider = Address::generate(&t.env);
+    t.mint(&provider, 1_000);
+    t.client.deposit(&provider, &1_000);
+
+    t.mint(&t.creditline, 100);
+    t.client.receive_repayment(&t.creditline, &0, &100);
+
+    let new_treasury_balance = t.token.balance(&new_treasury);
+    assert_eq!(new_treasury_balance, 10); // 10% of 100
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #1)")]
+fn test_set_treasury_by_non_admin_fails() {
+    let t = TestEnv::setup();
+    let intruder = Address::generate(&t.env);
+    let new_treasury = Address::generate(&t.env);
+
+    t.client.set_treasury(&intruder, &new_treasury);
+}
+
+#[test]
+fn test_set_merchant_fund() {
+    let t = TestEnv::setup();
+    let new_merchant_fund = Address::generate(&t.env);
+
+    t.client.set_merchant_fund(&t.admin, &new_merchant_fund);
+
+    // Verify by distributing interest and checking new merchant fund receives fees
+    let provider = Address::generate(&t.env);
+    t.mint(&provider, 1_000);
+    t.client.deposit(&provider, &1_000);
+
+    t.mint(&t.creditline, 100);
+    t.client.receive_repayment(&t.creditline, &0, &100);
+
+    let new_merchant_fund_balance = t.token.balance(&new_merchant_fund);
+    assert_eq!(new_merchant_fund_balance, 5); // 5% of 100
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #1)")]
+fn test_set_merchant_fund_by_non_admin_fails() {
+    let t = TestEnv::setup();
+    let intruder = Address::generate(&t.env);
+    let new_merchant_fund = Address::generate(&t.env);
+
+    t.client.set_merchant_fund(&intruder, &new_merchant_fund);
+}
+
+// ─── receive_repayment Edge Cases ────────────────────────────────────────────
+
+#[test]
+fn test_receive_repayment_with_zero_principal() {
+    let t = TestEnv::setup();
+    let provider = Address::generate(&t.env);
+    let merchant = Address::generate(&t.env);
+    t.mint(&provider, 1_000);
+    t.client.deposit(&provider, &1_000);
+
+    // Fund a loan
+    t.client.fund_loan(&t.creditline, &merchant, &500);
+
+    let stats_before = t.client.get_pool_stats();
+    assert_eq!(stats_before.locked_liquidity, 500);
+
+    // Repay with only interest, no principal
+    t.mint(&t.creditline, 50);
+    t.client.receive_repayment(&t.creditline, &0, &50);
+
+    let stats_after = t.client.get_pool_stats();
+    // Locked should remain unchanged
+    assert_eq!(stats_after.locked_liquidity, 500);
+    // Total liquidity should increase by LP portion (85% of 50 = 42)
+    assert_eq!(stats_after.total_liquidity, 1_042);
+}
+
+#[test]
+fn test_receive_repayment_with_zero_interest() {
+    let t = TestEnv::setup();
+    let provider = Address::generate(&t.env);
+    let merchant = Address::generate(&t.env);
+    t.mint(&provider, 1_000);
+    t.client.deposit(&provider, &1_000);
+
+    // Fund a loan
+    t.client.fund_loan(&t.creditline, &merchant, &500);
+
+    // Repay with only principal, no interest
+    t.mint(&t.creditline, 500);
+    t.client.receive_repayment(&t.creditline, &500, &0);
+
+    let stats = t.client.get_pool_stats();
+    // Locked should be reduced to zero
+    assert_eq!(stats.locked_liquidity, 0);
+    // Total liquidity should remain unchanged (no interest added)
+    assert_eq!(stats.total_liquidity, 1_000);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn test_receive_repayment_negative_principal_fails() {
+    let t = TestEnv::setup();
+    t.client.receive_repayment(&t.creditline, &-100, &50);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn test_receive_repayment_negative_interest_fails() {
+    let t = TestEnv::setup();
+    t.client.receive_repayment(&t.creditline, &100, &-50);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #9)")]
+fn test_receive_repayment_unauthorized_caller_fails() {
+    let t = TestEnv::setup();
+    let intruder = Address::generate(&t.env);
+    t.client.receive_repayment(&intruder, &100, &50);
+}
+
+// ─── receive_guarantee Edge Cases ────────────────────────────────────────────
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn test_receive_guarantee_with_zero_amount_fails() {
+    let t = TestEnv::setup();
+    t.client.receive_guarantee(&t.creditline, &0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn test_receive_guarantee_negative_amount_fails() {
+    let t = TestEnv::setup();
+    t.client.receive_guarantee(&t.creditline, &-100);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #9)")]
+fn test_receive_guarantee_unauthorized_caller_fails() {
+    let t = TestEnv::setup();
+    let intruder = Address::generate(&t.env);
+    t.client.receive_guarantee(&intruder, &100);
+}
+
+#[test]
+fn test_receive_guarantee_exceeds_locked_liquidity() {
+    let t = TestEnv::setup();
+    let provider = Address::generate(&t.env);
+    let merchant = Address::generate(&t.env);
+    t.mint(&provider, 1_000);
+    t.client.deposit(&provider, &1_000);
+
+    // Fund a loan for 500
+    t.client.fund_loan(&t.creditline, &merchant, &500);
+
+    // Receive guarantee of 600 (more than locked 500)
+    // The contract should cap recovery at locked amount (500)
+    t.mint(&t.creditline, 600);
+    t.client.receive_guarantee(&t.creditline, &600);
+
+    let stats = t.client.get_pool_stats();
+    // Locked should be reduced to 0 (capped at 500)
+    assert_eq!(stats.locked_liquidity, 0);
+    // Total liquidity should increase by only 500 (not 600)
+    assert_eq!(stats.total_liquidity, 1_500);
+}
+
+// ─── fund_loan Edge Cases ────────────────────────────────────────────────────
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn test_fund_loan_with_zero_amount_fails() {
+    let t = TestEnv::setup();
+    let merchant = Address::generate(&t.env);
+    t.client.fund_loan(&t.creditline, &merchant, &0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn test_fund_loan_with_negative_amount_fails() {
+    let t = TestEnv::setup();
+    let merchant = Address::generate(&t.env);
+    t.client.fund_loan(&t.creditline, &merchant, &-500);
+}
+
+// ─── distribute_interest Edge Cases ──────────────────────────────────────────
+// Note: distribute_interest is called internally by receive_repayment
+// We test it indirectly through receive_repayment with zero/negative interest
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn test_receive_repayment_with_zero_total_fails() {
+    let t = TestEnv::setup();
+    // Both principal and interest are zero - should fail
+    t.client.receive_repayment(&t.creditline, &0, &0);
+}
+
+// ─── Integration Scenarios ───────────────────────────────────────────────────
+
+#[test]
+fn test_multiple_loans_concurrent_funding() {
+    let t = TestEnv::setup();
+    let provider = Address::generate(&t.env);
+    t.mint(&provider, 10_000);
+    t.client.deposit(&provider, &10_000);
+
+    let merchant1 = Address::generate(&t.env);
+    let merchant2 = Address::generate(&t.env);
+    let merchant3 = Address::generate(&t.env);
+
+    // Fund multiple loans
+    t.client.fund_loan(&t.creditline, &merchant1, &2_000);
+    t.client.fund_loan(&t.creditline, &merchant2, &3_000);
+    t.client.fund_loan(&t.creditline, &merchant3, &1_500);
+
+    let stats = t.client.get_pool_stats();
+    assert_eq!(stats.locked_liquidity, 6_500);
+    assert_eq!(stats.available_liquidity, 3_500);
+    assert_eq!(stats.total_liquidity, 10_000);
+}
+
+#[test]
+fn test_partial_guarantee_recovery_multiple_defaults() {
+    let t = TestEnv::setup();
+    let provider = Address::generate(&t.env);
+    t.mint(&provider, 10_000);
+    t.client.deposit(&provider, &10_000);
+
+    let merchant1 = Address::generate(&t.env);
+    let merchant2 = Address::generate(&t.env);
+
+    // Fund two loans
+    t.client.fund_loan(&t.creditline, &merchant1, &3_000);
+    t.client.fund_loan(&t.creditline, &merchant2, &2_000);
+
+    // First default with partial guarantee
+    t.mint(&t.creditline, 1_000);
+    t.client.receive_guarantee(&t.creditline, &1_000);
+
+    let stats_after_first = t.client.get_pool_stats();
+    assert_eq!(stats_after_first.locked_liquidity, 4_000); // 5000 - 1000
+    assert_eq!(stats_after_first.total_liquidity, 11_000); // 10000 + 1000
+
+    // Second default with partial guarantee
+    t.mint(&t.creditline, 800);
+    t.client.receive_guarantee(&t.creditline, &800);
+
+    let stats_after_second = t.client.get_pool_stats();
+    assert_eq!(stats_after_second.locked_liquidity, 3_200); // 4000 - 800
+    assert_eq!(stats_after_second.total_liquidity, 11_800); // 11000 + 800
+}
+
+#[test]
+fn test_complex_lifecycle_deposits_loans_repayments_withdrawals() {
+    let t = TestEnv::setup();
+
+    // Multiple providers deposit
+    let provider1 = Address::generate(&t.env);
+    let provider2 = Address::generate(&t.env);
+    t.mint(&provider1, 5_000);
+    t.mint(&provider2, 3_000);
+
+    t.client.deposit(&provider1, &5_000);
+    t.client.deposit(&provider2, &3_000);
+
+    // Fund loans
+    let merchant = Address::generate(&t.env);
+    t.client.fund_loan(&t.creditline, &merchant, &4_000);
+
+    // Partial repayment with interest
+    t.mint(&t.creditline, 2_500);
+    t.client.receive_repayment(&t.creditline, &2_000, &500);
+
+    let stats_mid = t.client.get_pool_stats();
+    assert_eq!(stats_mid.locked_liquidity, 2_000);
+
+    // Provider1 withdraws some shares
+    let shares_to_withdraw = t.client.get_lp_shares(&provider1) / 2;
+    t.client.withdraw(&provider1, &shares_to_withdraw);
+
+    // Complete repayment
+    t.mint(&t.creditline, 2_200);
+    t.client.receive_repayment(&t.creditline, &2_000, &200);
+
+    let stats_final = t.client.get_pool_stats();
+    assert_eq!(stats_final.locked_liquidity, 0);
+
+    // Both providers can withdraw remaining shares
+    let remaining1 = t.client.get_lp_shares(&provider1);
+    let remaining2 = t.client.get_lp_shares(&provider2);
+
+    assert!(remaining1 > 0);
+    assert!(remaining2 > 0);
+}
+
+#[test]
+fn test_interest_distribution_with_empty_pool() {
+    let t = TestEnv::setup();
+
+    // Try to distribute interest when pool is empty
+    // This should not panic but also not do anything meaningful
+    t.mint(&t.creditline, 100);
+    t.client.receive_repayment(&t.creditline, &0, &100);
+
+    let stats = t.client.get_pool_stats();
+    // With no shares, interest still gets distributed to treasury/merchant fund
+    assert_eq!(t.token.balance(&t.treasury), 10);
+    assert_eq!(t.token.balance(&t.merchant_fund), 5);
+    // LP portion (85) stays in pool
+    assert_eq!(stats.total_liquidity, 85);
+}
+
+#[test]
+fn test_withdrawal_after_multiple_interest_distributions() {
+    let t = TestEnv::setup();
+    let provider = Address::generate(&t.env);
+    t.mint(&provider, 1_000);
+
+    let shares = t.client.deposit(&provider, &1_000);
+
+    // Multiple interest distributions
+    for _ in 0..5 {
+        t.mint(&t.creditline, 100);
+        t.client.receive_repayment(&t.creditline, &0, &100);
+    }
+
+    // Withdraw all shares
+    let withdrawn = t.client.withdraw(&provider, &shares);
+
+    // Should receive original + accumulated interest
+    // 5 * 85 (LP portion) = 425
+    assert_eq!(withdrawn, 1_425);
+}
+
+#[test]
+fn test_loan_funding_and_guarantee_recovery_cycle() {
+    let t = TestEnv::setup();
+    let provider = Address::generate(&t.env);
+    t.mint(&provider, 5_000);
+    t.client.deposit(&provider, &5_000);
+
+    let merchant = Address::generate(&t.env);
+
+    // Fund loan
+    t.client.fund_loan(&t.creditline, &merchant, &2_000);
+
+    // Partial guarantee recovery
+    t.mint(&t.creditline, 500);
+    t.client.receive_guarantee(&t.creditline, &500);
+
+    let stats_after_guarantee = t.client.get_pool_stats();
+    assert_eq!(stats_after_guarantee.locked_liquidity, 1_500);
+    assert_eq!(stats_after_guarantee.total_liquidity, 5_500);
+
+    // Fund another loan
+    t.client.fund_loan(&t.creditline, &merchant, &1_000);
+
+    let stats_final = t.client.get_pool_stats();
+    assert_eq!(stats_final.locked_liquidity, 2_500);
+    assert_eq!(stats_final.available_liquidity, 3_000);
 }
